@@ -19,6 +19,9 @@ import struct
 import unittest
 
 from google.cloud.bigtable import client as client_mod
+from google.cloud.bigtable.column_family import MaxVersionsGCRule
+from google.cloud.bigtable.column_family import MaxAgeGCRule
+from google.cloud.bigtable.column_family import GCRuleUnion
 from google.cloud.happybase.connection import Connection
 
 from retry import RetryResult
@@ -27,9 +30,10 @@ from system_test_utils import unique_resource_id
 
 _PACK_I64 = struct.Struct('>q').pack
 _FIRST_ELT = operator.itemgetter(0)
-LOCATION_ID = 'us-central1-c'
+LOCATION_ID = 'us-east1-b'
 # NOTE: Avoid using the same name as in bigtable.py
 INSTANCE_ID = 'gcl-hb' + unique_resource_id('-')
+CLUSTER_ID = 'gcl-hb-c1' + unique_resource_id('-')
 TABLE_NAME = 'table-name'
 ALT_TABLE_NAME = 'other-table'
 TTL_FOR_TEST = 3
@@ -37,9 +41,9 @@ COL_FAM1 = 'cf1'
 COL_FAM2 = 'cf2'
 COL_FAM3 = 'cf3'
 FAMILIES = {
-    COL_FAM1: {'max_versions': 10},
-    COL_FAM2: {'max_versions': 1, 'time_to_live': TTL_FOR_TEST},
-    COL_FAM3: {},  # use defaults
+    COL_FAM1: MaxVersionsGCRule(10),
+    COL_FAM2: GCRuleUnion([MaxVersionsGCRule(1), MaxAgeGCRule(TTL_FOR_TEST)]),
+    # COL_FAM3: object(),  # use defaults
 }
 ROW_KEY1 = 'row-key1'
 ROW_KEY2 = 'row-key2a'
@@ -83,15 +87,24 @@ def _wait_until_complete(operation, max_attempts=5):
     :returns: Boolean indicating if the operation is complete.
     """
     retry = RetryResult(_operation_complete, max_tries=max_attempts)
-    return retry(operation.poll)()
+    return retry(operation.result())()
 
 
 def set_connection():
     client = client_mod.Client(admin=True)
-    instance = client.instance(INSTANCE_ID, LOCATION_ID)
-    operation = instance.create()
-    if not _wait_until_complete(operation):
-        raise RuntimeError('Instance creation exceed 5 seconds.')
+    instances, failed_locations = client.list_instances()
+    for inst in instances:
+        if(inst.instance_id.startswith('gcl-hb-')):
+            print(inst.instance_id)
+            inst.delete()
+    instance = client.instance(INSTANCE_ID)
+    serve_nodes = 3
+    cluster = instance.cluster(CLUSTER_ID, location_id=LOCATION_ID,
+                               serve_nodes=serve_nodes)
+    operation = instance.create(clusters = [cluster])
+    operation.result(10)
+    # if not _wait_until_complete(operation):
+    #     raise RuntimeError('Instance creation exceed 5 seconds.')
     Config.CONNECTION = Connection(instance=instance)
 
 
